@@ -1,7 +1,7 @@
 
 # coding: utf-8
 
-# In[1]:
+
 
 # importing relevant libraries
 import matplotlib
@@ -27,6 +27,7 @@ from sklearn_pandas import DataFrameMapper
 from sklearn.preprocessing import OneHotEncoder
 from sklearn import metrics
 from sklearn.metrics import confusion_matrix
+from sklearn.metrics import cohen_kappa_score
 from xgboost import XGBClassifier
 from sklearn.ensemble import ExtraTreesClassifier
 import datetime
@@ -43,7 +44,7 @@ pd.options.display.max_columns = 999
 
 # ### 1. CLEAN PLI, PITT & TAX DATA
 
-# In[97]:
+
 
 # # create directory paths for opening files
 curr_path = os.path.dirname(os.path.realpath(__file__))
@@ -144,14 +145,14 @@ parcel_blocks=parcel_blocks.drop_duplicates()
 
 # #### 1.1 Aggregate pittdata to census block, then merge with acs data
 
-# In[99]:
+
 
 pittdata_blocks=pd.merge(pittdata, parcel_blocks, how='left', left_on=['PARID'], right_on=['PIN'])
 #drop extra columns
 pittdata_blocks = pittdata_blocks.drop(['PARID','PIN','PROPERTYHOUSENUM','PROPERTYADDRESS'], axis=1)
 
 
-# In[100]:
+
 
 #group by blocks
 grouped = pittdata_blocks.groupby(['TRACTCE10','BLOCKCE10'])
@@ -174,7 +175,7 @@ blocks = pittacs[['TRACTCE10','BLOCKCE10']].drop_duplicates()
 
 # #### 1.2 merge plidata with census block¶
 
-# In[102]:
+
 
 #group by blocks
 plidata_blocks = pd.merge(plidata, parcel_blocks, how='left', left_on=['PARCEL'], right_on=['PIN'])
@@ -185,7 +186,7 @@ plidata_blocks=plidata_blocks.dropna(subset=['TRACTCE10','BLOCKCE10'])
 
 # #### 1.3 Aggregate taxdata to census block¶
 
-# In[103]:
+
 
 # group by blocks
 taxdata_blocks = pd.merge(taxdata,parcel_blocks, how='left', left_on=['pin'], right_on=['PIN'])
@@ -195,7 +196,7 @@ taxdata_blocks = taxdata_blocks.dropna(subset=['TRACTCE10','BLOCKCE10'])
 
 # ### 2. Clean fire incident data
 
-# In[104]:
+
 
 # loading fire incidents csvs
 fire_pre14 = pd.read_csv(os.path.join(dataset_path, "Fire_Incidents_Pre14.csv"), encoding='latin-1', dtype={'street': 'str', 'number': 'str'}, low_memory=False)
@@ -256,7 +257,7 @@ fire_new = fire_new.drop_duplicates()
 
 # #### 2.1 merge fire incident to census block
 
-# In[105]:
+
 
 # convert from addresses to parcels
 fire_parcel = pd.merge(fire_new, address_parcels, how='inner',
@@ -281,7 +282,7 @@ fire_blocks = fire_blocks.drop_duplicates()
 
 # #### 3.1 joining dynamic data with fire incidents
 
-# In[106]:
+
 
 # making the fire column with all type 100s as fires and map it to 0 or 1
 fire_blocks['fire'] = fire_blocks['full.code'].astype(str).                    map(lambda x: 1 if x[0]=='1' else 0)
@@ -291,18 +292,30 @@ nonfire_incidents = nonfire_incidents[['CALL_CREATED_DATE','full.code','TRACTCE1
 fire_blocks.drop('full.code',axis=1,inplace=True)
 
 
-# In[107]:
+
 
 # group by every certain period of time
 # reason for setting period to year: tax data is based on year
-period = 'Y' 
+period = '2Q'
+# hacky thing to make 6-month period work
+fire_blocks.loc[-1] = fire_blocks.iloc[0]
+nonfire_incidents.loc[-1] = nonfire_incidents.iloc[0]
+plidata_blocks.loc[-1] = plidata_blocks.iloc[0]
+taxdata_blocks.loc[-1] = taxdata_blocks.iloc[0]
+fire_blocks['CALL_CREATED_DATE'].loc[-1] = pd.to_datetime('12-31-'+str(fire_blocks['CALL_CREATED_DATE'].min().year-1))
+nonfire_incidents['CALL_CREATED_DATE'].loc[-1] = pd.to_datetime('12-31-'+str(nonfire_incidents['CALL_CREATED_DATE'].min().year-1))
+plidata_blocks['INSPECTION_DATE'].loc[-1] = pd.to_datetime('12-31-'+str(plidata_blocks['INSPECTION_DATE'].min().year-1))
+taxtemp = taxdata_blocks.copy()
+taxtemp['tax_year'] = taxtemp['tax_year'] + datetime.timedelta(days=-6*31)
+taxdata_blocks = taxdata_blocks.append(taxtemp)
+taxdata_blocks['tax_year'].loc[-1] = pd.to_datetime('12-31-'+str(taxdata_blocks['tax_year'].min().year-1))
 fire_groups = fire_blocks.groupby(pd.Grouper(key='CALL_CREATED_DATE', freq=period))
 nonfire_groups = nonfire_incidents.groupby(pd.Grouper(key='CALL_CREATED_DATE', freq=period))
 plidata_groups = plidata_blocks.groupby(pd.Grouper(key='INSPECTION_DATE', freq=period))
 taxdata_groups = taxdata_blocks.groupby(pd.Grouper(key='tax_year', freq=period))
 
 
-# In[108]:
+
 
 # then group fire by census blocks
 def groupByBlock(df,categoricals, method):
@@ -319,18 +332,20 @@ def groupByBlock(df,categoricals, method):
 fire_divided = fire_groups.apply(groupByBlock,categoricals=[],method='max')
 fire_divided.drop('CALL_CREATED_DATE',axis=1,inplace=True)
 fire_divided=fire_divided.reset_index()
+fire_divided=fire_divided[fire_divided['CALL_CREATED_DATE'] > fire_divided['CALL_CREATED_DATE'].min()]
 fire_divided=fire_divided.fillna(0)
 
 
-# In[109]:
+
 
 # group nonfire incidents by census blocks
 nonfire_divided = nonfire_groups.apply(groupByBlock,categoricals=['full.code'],method='sum')
 nonfire_divided=nonfire_divided.reset_index()
+nonfire_divided=nonfire_divided[nonfire_divided['CALL_CREATED_DATE'] > nonfire_divided['CALL_CREATED_DATE'].min()]
 nonfire_divided=nonfire_divided.fillna(0)
 
 
-# In[110]:
+
 
 # group pli incidents by census blocks
 def groupByBlock_pli(df):
@@ -343,10 +358,11 @@ def groupByBlock_pli(df):
     return df_grouped
 pli_divided=plidata_groups.apply(groupByBlock_pli)
 pli_divided=pli_divided.reset_index()
+pli_divided=pli_divided[pli_divided['INSPECTION_DATE'] > pli_divided['INSPECTION_DATE'].min()]
 pli_divided=pli_divided.fillna(0)
 
 
-# In[111]:
+
 
 # group tax data by census blocks
 def groupByBlock_tax(df):
@@ -359,10 +375,11 @@ def groupByBlock_tax(df):
 
 tax_divided=taxdata_groups.apply(groupByBlock,categoricals=['lien_description'],method='sum')
 tax_divided=tax_divided.reset_index()
+tax_divided=tax_divided[tax_divided['tax_year'] > tax_divided['tax_year'].min()]
 tax_divided=tax_divided.fillna(0)
 
 
-# In[179]:
+
 
 # join fire, nonfire, pli, tax data together
 fire_nonfire = pd.merge(fire_divided,nonfire_divided,how='outer',
@@ -378,16 +395,13 @@ fire_nonfire_pli_tax.drop(['INSPECTION_DATE','tax_year'],axis=1,inplace=True)
 
 
 
-# In[180]:
+
 
 # drop columns with less than thresold% data
 threshold=0.0001
 s=fire_nonfire_pli_tax.sum()
 drop_columns=s[s<len(fire_nonfire_pli_tax)*threshold].index
 fire_nonfire_pli_tax.drop(drop_columns,axis=1,inplace=True)
-
-
-# In[181]:
 
 # join with pitt_blocks
 combined = pd.merge(fire_nonfire_pli_tax,pittacs,
@@ -403,7 +417,7 @@ encoded_combined=encoded_combined.fillna(0)
 
 # ### 4 Split data into training set and test set
 
-# In[172]:
+
 
 # PREPARING THE TESTING DATA (final 1 year of data)
 cutoffdate = '2016-12-31'
@@ -415,7 +429,7 @@ X_train=np.array(traindata.drop(['fire'],axis=1))
 y_train=np.array(traindata['fire'])
 
 
-# In[173]:
+
 
 # preparing test set
 testdata = encoded_combined[encoded_combined.CALL_CREATED_DATE > cutoffdate]
@@ -424,60 +438,6 @@ testdata.fillna(0)
 X_test=np.array(testdata.drop(['fire'],axis=1))
 y_test=np.array(testdata['fire'])
 
-
-
-# In[174]:
-
-# The XG Boost model
-model = XGBClassifier(learning_rate=0.13,
-                      n_estimators=1500,
-                      max_depth=5, min_child_weight=1,
-                      gamma=0,
-                      subsample=0.8,
-                      colsample_bytree=0.8,
-                      objective='binary:logistic',
-                      nthread=4,
-                      seed=27)
-model.fit(X_train, y_train)
-pred = model.predict(X_test)
-real = y_test
-cm_xg = confusion_matrix(real, pred)
-print(cm_xg)
-
-from sklearn.metrics import cohen_kappa_score
-kappa_xg = cohen_kappa_score(real, pred)
-
-fpr, tpr, thresholds = metrics.roc_curve(y_test, pred, pos_label=1)
-roc_auc = metrics.auc(fpr, tpr)
-
-acc_xg = 'Accuracy = {0} \n \n'.format(float(cm_xg[0][0] + cm_xg[1][1]) / len(real))
-kapp_xg = 'kappa score = {0} \n \n'.format(kappa_xg)
-auc_xg = 'AUC Score = {0} \n \n'.format(metrics.auc(fpr, tpr))
-recall_xg = 'recall = {0} \n \n'.format(tpr[1])
-precis_xg = 'precision = {0} \n \n'.format(float(cm_xg[1][1]) / (cm_xg[1][1] + cm_xg[0][1]))
-
-print(acc_xg)
-print(kapp_xg)
-print(auc_xg)
-print(recall_xg)
-print(precis_xg)
-
-
-# Write model performance to log file:
-log_path = os.path.join(curr_path, "log/")
-
-with open('{0}ModelPerformance_XGBoost_{1}.txt'.format(log_path, datetime.datetime.now().strftime('%m%d-%H%M%S')), 'a') as log_file:
-  log_file.write("Confusion Matrix: \n \n")
-  log_file.write(np.array2string(cm_xg)+"\n \n")
-  log_file.write("Model performance metrics: \n \n")
-  log_file.write(acc_xg)
-  log_file.write(kapp_xg)
-  log_file.write(auc_xg)
-  log_file.write(recall_xg)
-  log_file.write(precis_xg)
-
-
-# In[175]:
 
 # Adaboost model
 from sklearn.ensemble import AdaBoostClassifier
@@ -520,7 +480,7 @@ with open('{0}ModelPerformance_AdaBoost_{1}.txt'.format(log_path, datetime.datet
   log_file.write(precis_ada)
 
 
-# In[176]:
+
 
 # Adaboost model
 from sklearn.ensemble import RandomForestClassifier
@@ -563,7 +523,7 @@ with open('{0}ModelPerformance_RF_{1}.txt'.format(log_path, datetime.datetime.no
   log_file.write(precis_rf)
 
 
-# In[177]:
+
 
 from sklearn import linear_model
 samples = np.array([0.1 if i == 0 else 1.2 for i in y_train])
@@ -572,21 +532,15 @@ model.fit(X_train, y_train,sample_weight = samples)
 pred = model.predict(X_test)
 real = y_test
 cm = confusion_matrix(real, pred)
-print (confusion_matrix(real, pred))
+print(confusion_matrix(real, pred))
 
 from sklearn.metrics import cohen_kappa_score
 kappa = cohen_kappa_score(real, pred)
 
 fpr, tpr, thresholds = metrics.roc_curve(y_test, pred, pos_label=1)
 
-print ('Accuracy = ', float(cm[0][0] + cm[1][1])/len(real))
-print ('kappa score = ', kappa)
-print ('AUC Score = ', metrics.auc(fpr, tpr))
-print ('recall = ',tpr[1])
-print ('precision = ',float(cm[1][1])/(cm[1][1]+cm[0][1]))
-
-
-# In[ ]:
-
-
-
+print('Accuracy = ', float(cm[0][0] + cm[1][1])/len(real))
+print('kappa score = ', kappa)
+print('AUC Score = ', metrics.auc(fpr, tpr))
+print('recall = ',tpr[1])
+print('precision = ',float(cm[1][1])/(cm[1][1]+cm[0][1]))
