@@ -1,4 +1,3 @@
-
 # coding: utf-8
 
 # importing relevant libraries
@@ -43,7 +42,7 @@ pd.options.display.max_columns = 999
 # ### 1. CLEAN PLI, PITT & TAX DATA
 
 # # create directory paths for opening files
-curr_path = os.path.dirname(os.path.realpath(__file__))
+curr_path = ''
 # curr_path = os.path.dirname(os.path.realpath("residentialTax.ipynb"))
 dataset_path = os.path.join(curr_path, "datasets/")
 inter_path = os.path.join(curr_path,"interResults/")
@@ -141,6 +140,8 @@ parcel_blocks=parcel_blocks.drop_duplicates()
 
 # #### 1.1 Aggregate pittdata to census block, then merge with acs data
 
+
+
 pittdata_blocks=pd.merge(pittdata, parcel_blocks, how='left', left_on=['PARID'], right_on=['PIN'])
 #drop extra columns
 pittdata_blocks = pittdata_blocks.drop(['PARID','PIN','PROPERTYHOUSENUM','PROPERTYADDRESS'], axis=1)
@@ -199,7 +200,7 @@ fire_pre14['street'] = fire_pre14['street'].str.strip() + ' ' + fire_pre14['st_t
 # drop irrelevant columns
 pre14_drop = ['Unnamed: 0','PRIMARY_UNIT', 'MAP_PAGE', 'alm_dttm', 'arv_dttm', 'XCOORD', 
               'YCOORD','inci_id', 'inci_type', 'alarms', 'st_prefix',
-              'st_suffix', 'st_type', 'CALL_NO','descript','ï..AGENCY']
+              'st_suffix', 'st_type', 'CALL_NO','descript','..AGENCY']
 for col in pre14_drop:
   del fire_pre14[col]
 
@@ -276,19 +277,7 @@ fire_blocks.drop('full.code',axis=1,inplace=True)
 
 # group by every certain period of time
 # reason for setting period to year: tax data is based on year
-period = '2Q'
-# hacky thing to make 6-month period work
-fire_blocks.loc[-1] = fire_blocks.iloc[0]
-nonfire_incidents.loc[-1] = nonfire_incidents.iloc[0]
-plidata_blocks.loc[-1] = plidata_blocks.iloc[0]
-taxdata_blocks.loc[-1] = taxdata_blocks.iloc[0]
-fire_blocks['CALL_CREATED_DATE'].loc[-1] = pd.to_datetime('12-31-'+str(fire_blocks['CALL_CREATED_DATE'].min().year-1))
-nonfire_incidents['CALL_CREATED_DATE'].loc[-1] = pd.to_datetime('12-31-'+str(nonfire_incidents['CALL_CREATED_DATE'].min().year-1))
-plidata_blocks['INSPECTION_DATE'].loc[-1] = pd.to_datetime('12-31-'+str(plidata_blocks['INSPECTION_DATE'].min().year-1))
-taxtemp = taxdata_blocks.copy()
-taxtemp['tax_year'] = taxtemp['tax_year'] + datetime.timedelta(days=-6*31)
-taxdata_blocks = taxdata_blocks.append(taxtemp)
-taxdata_blocks['tax_year'].loc[-1] = pd.to_datetime('12-31-'+str(taxdata_blocks['tax_year'].min().year-1))
+period = 'A'
 fire_groups = fire_blocks.groupby(pd.Grouper(key='CALL_CREATED_DATE', freq=period))
 nonfire_groups = nonfire_incidents.groupby(pd.Grouper(key='CALL_CREATED_DATE', freq=period))
 plidata_groups = plidata_blocks.groupby(pd.Grouper(key='INSPECTION_DATE', freq=period))
@@ -310,14 +299,12 @@ def groupByBlock(df,categoricals, method):
 fire_divided = fire_groups.apply(groupByBlock,categoricals=[],method='max')
 fire_divided.drop('CALL_CREATED_DATE',axis=1,inplace=True)
 fire_divided=fire_divided.reset_index()
-fire_divided=fire_divided[fire_divided['CALL_CREATED_DATE'] > fire_divided['CALL_CREATED_DATE'].min()]
 fire_divided=fire_divided.fillna(0)
 
 
 # group nonfire incidents by census blocks
 nonfire_divided = nonfire_groups.apply(groupByBlock,categoricals=['full.code'],method='sum')
 nonfire_divided=nonfire_divided.reset_index()
-nonfire_divided=nonfire_divided[nonfire_divided['CALL_CREATED_DATE'] > nonfire_divided['CALL_CREATED_DATE'].min()]
 nonfire_divided=nonfire_divided.fillna(0)
 
 
@@ -332,7 +319,6 @@ def groupByBlock_pli(df):
     return df_grouped
 pli_divided=plidata_groups.apply(groupByBlock_pli)
 pli_divided=pli_divided.reset_index()
-pli_divided=pli_divided[pli_divided['INSPECTION_DATE'] > pli_divided['INSPECTION_DATE'].min()]
 pli_divided=pli_divided.fillna(0)
 
 
@@ -347,7 +333,6 @@ def groupByBlock_tax(df):
 
 tax_divided=taxdata_groups.apply(groupByBlock,categoricals=['lien_description'],method='sum')
 tax_divided=tax_divided.reset_index()
-tax_divided=tax_divided[tax_divided['tax_year'] > tax_divided['tax_year'].min()]
 tax_divided=tax_divided.fillna(0)
 
 
@@ -363,11 +348,13 @@ fire_nonfire_pli_tax = pd.merge(fire_nonfire_pli,tax_divided,how='outer',
 fire_nonfire_pli_tax['CALL_CREATED_DATE']=fire_nonfire_pli_tax['CALL_CREATED_DATE'].                                           fillna(fire_nonfire_pli_tax['CALL_CREATED_DATE'])
 fire_nonfire_pli_tax.drop(['INSPECTION_DATE','tax_year'],axis=1,inplace=True)
 
+
 # drop columns with less than thresold% data
 threshold=0.0001
 s=fire_nonfire_pli_tax.sum()
 drop_columns=s[s<len(fire_nonfire_pli_tax)*threshold].index
 fire_nonfire_pli_tax.drop(drop_columns,axis=1,inplace=True)
+
 
 # join with pitt_blocks
 combined = pd.merge(fire_nonfire_pli_tax,pittacs,
@@ -382,31 +369,55 @@ encoded_combined=encoded_combined.fillna(0)
 
 
 # ### 4 Split data into training set and test set
-
 # PREPARING THE TESTING DATA (final 1 year of data)
 cutoffdate = '2016-12-31'
 # preparing training set
-traindata = encoded_combined[encoded_combined.CALL_CREATED_DATE <= cutoffdate]
-traindata.drop(['CALL_CREATED_DATE','TRACTCE10','BLOCKCE10'],axis=1,inplace=True)
-traindata.fillna(0)
-X_train=np.array(traindata.drop(['fire'],axis=1))
-y_train=np.array(traindata['fire'])
+encoded_traindata = encoded_combined[encoded_combined.CALL_CREATED_DATE <= cutoffdate]
 
+#making valuation dataset before CALL_CREATED_DATE is deleted
+val_cutoffdate = '2015-12-31'
+
+encoded_traindata.to_csv("encode_train.csv")
+print("printed encoded_train")
+valuation_data = encoded_traindata[encoded_traindata.CALL_CREATED_DATE >= val_cutoffdate]
+fs_train_data = encoded_traindata[encoded_traindata.CALL_CREATED_DATE < val_cutoffdate]
+
+valuation_data = valuation_data.drop(['CALL_CREATED_DATE','TRACTCE10','BLOCKCE10'], axis=1)
+fs_train_data = fs_train_data.drop(['CALL_CREATED_DATE','TRACTCE10','BLOCKCE10'], axis=1)
+
+encoded_traindata.drop(['CALL_CREATED_DATE','TRACTCE10','BLOCKCE10'],axis=1,inplace=True)
+encoded_traindata.fillna(0)
+X_train=np.array(encoded_traindata.drop(['fire'],axis=1))
+y_train=np.array(encoded_traindata['fire'])
 
 # preparing test set
-testdata = encoded_combined[encoded_combined.CALL_CREATED_DATE > cutoffdate]
-testdata.drop(['CALL_CREATED_DATE','TRACTCE10','BLOCKCE10'],axis=1,inplace=True)
-testdata.fillna(0)
-X_test=np.array(testdata.drop(['fire'],axis=1))
-y_test=np.array(testdata['fire'])
+encoded_testdata = encoded_combined[encoded_combined.CALL_CREATED_DATE > cutoffdate]
+encoded_testdata.drop(['CALL_CREATED_DATE','TRACTCE10','BLOCKCE10'],axis=1,inplace=True)
+encoded_testdata.fillna(0)
+X_test=np.array(encoded_testdata.drop(['fire'],axis=1))
+y_test=np.array(encoded_testdata['fire'])
 
+#converting to array and reshaping the data to prep for model
+fireVarTrain = encoded_traindata['fire']
+#del encoded_traindata['fire']
+no_fire_train = encoded_traindata.drop(['fire'], axis =1)
+X_train = np.array(no_fire_train)
+y_train = np.reshape(fireVarTrain.values,[fireVarTrain.shape[0],])
+
+#converting to array and reshaping the data to prep for model
+fireVarTest = encoded_testdata['fire']
+#del encoded_testdata['fire']
+no_fire_test = encoded_testdata.drop(['fire'], axis =1)
+#dropping fire attribute to make fire valuation dataset later
+X_test = np.array(no_fire_test)
+y_test = np.reshape(fireVarTest.values,[fireVarTest.shape[0],])
 
 # Adaboost model
 from sklearn.ensemble import AdaBoostClassifier
 
-model_adaboost = AdaBoostClassifier(n_estimators = 65, random_state=27)
-model_adaboost.fit(X_train, y_train)
-pred_adaboost = model_adaboost.predict(X_test)
+model = AdaBoostClassifier(n_estimators = 65, random_state=27)
+model.fit(X_train, y_train)
+pred_adaboost = model.predict(X_test)
 real = y_test
 cm_ada = confusion_matrix(real, pred_adaboost)
 print(cm_ada)
@@ -428,79 +439,140 @@ print(auc_ada)
 print(recall_ada)
 print(precis_ada)
 
-# Write model performance to log file:
-log_path = os.path.join(curr_path, "log/")
 
-with open('{0}ModelPerformance_AdaBoost_{1}.txt'.format(log_path, datetime.datetime.now().strftime('%m%d-%H%M%S')), 'a') as log_file:
-  log_file.write("Confusion Matrix: \n \n")
-  log_file.write(np.array2string(cm_ada)+"\n \n")
-  log_file.write("Model performance metrics: \n \n")
-  log_file.write(acc_ada)
-  log_file.write(kapp_ada)
-  log_file.write(auc_ada)
-  log_file.write(recall_ada)
-  log_file.write(precis_ada)
+print("Start Feature Selection")
+# ==== Feature Selection using Feature Importance =====
+from sklearn.feature_selection import SelectFromModel
+from sklearn.metrics import accuracy_score
+
+# imputed the values to run with the xgboost features selection
+fireVarVal = valuation_data['fire'].fillna(method="ffill")
+del valuation_data['fire']
+# valuation datasets for feature selection
+valuation_X = np.array(valuation_data.fillna(method="ffill"))
+valuation_y = np.reshape(fireVarVal.values, [fireVarVal.shape[0],])
+
+# make the training dataset for feature selection removing the valuation data
+fireVarFSTrain = fs_train_data['fire'].fillna(method="ffill")
+del fs_train_data['fire']
+# imputed training data for the feature selection
+impute_X = np.array(fs_train_data.fillna(method="ffill"))
+impute_y = np.reshape(fireVarFSTrain.values, [fireVarFSTrain.shape[0],])
+
+# calculate imputed test dataset
+imputed_fireVarTest = fireVarTest.fillna(method="ffill")
+
+# imputed XY test - not used until the model evaluation
+impute_X_test = np.array(encoded_testdata.fillna(method="ffill"))
+impute_y_test = np.reshape(imputed_fireVarTest.values, [imputed_fireVarTest.shape[0],])
+
+#model for feature selection
+selection_model = AdaBoostClassifier(n_estimators = 65, random_state=27)
+
+# create the list of features with corresponding feature importances
+feature_importance = pd.Series(data=model.feature_importances_, index=encoded_traindata.drop(['fire'], axis =1).columns)
+
+#sort the feature importance from low to hi
+feature_importance = feature_importance.sort_values()
+# Making threshold smaller
+thresh_num = 500
+
+feature_result = pd.DataFrame(columns=('Last_Feature', 'Thresh', 'Acc', 'Kapp', 'AUC', 'Recall', 'Precis'))
+
+for i in range(feature_importance.size-thresh_num, feature_importance.size):
+    # select features using threshold
+    selection = SelectFromModel(model, threshold=feature_importance[i], prefit=True)
+    select_X_train = selection.transform(impute_X)
+
+    # train model
+    selection_model.fit(select_X_train, impute_y)
+
+    # eval model
+    select_X_test = selection.transform(valuation_X)
+    y_pred = selection_model.predict(select_X_test)
+    predictions = [round(value) for value in y_pred]
+    #metric calculation
+    fpr, tpr, thresholds = metrics.roc_curve(valuation_y, predictions, pos_label=1)
+    accuracy = accuracy_score(valuation_y, predictions)
+    cm = confusion_matrix(valuation_y, predictions)
+    print(confusion_matrix(valuation_y, predictions))
+
+    kappa = cohen_kappa_score(valuation_y, predictions)
+    acc = float(cm[0][0] + cm[1][1]) / len(valuation_y)
+    auc = metrics.auc(fpr, tpr)
+    recall = tpr[1]
+    precis = float(cm[1][1]) / (cm[1][1] + cm[0][1])
+
+    print("Thresh=%.3f, n=%d" % (feature_importance[i], select_X_train.shape[1]))
+    print('Accuracy = {0} \n \n'.format(acc))
+    print('kappa score = {0} \n \n'.format(kappa))
+    print('AUC Score = {0} \n \n'.format(auc))
+    print('recall = {0} \n \n'.format(recall))
+    print('precision = {0} \n \n'.format(precis))
+
+    feature_result.loc[i] = [feature_importance.index[i], feature_importance[i], acc, kappa, auc, recall, precis]
+
+#find the best recall
+best_row = feature_result.loc[feature_result['Recall'].idxmax()]
+print("best row:")
+print(best_row)
+
+feature_result.to_csv("Feature_Selection_Results{0}.csv".format(datetime.datetime.now()))
+
+#test on the test data
+# eval model
+selection_test = SelectFromModel(model, threshold=best_row[1], prefit=True)
+select_X_test = selection_test.transform(impute_X_test)
+y_pred = selection_model.predict(select_X_test)
+predictions = [round(value) for value in y_pred]
+fpr, tpr, thresholds = metrics.roc_curve(impute_y_test, predictions, pos_label=1)
+accuracy = accuracy_score(impute_y_test, predictions)
+cm = confusion_matrix(impute_y_test, predictions)
+print(confusion_matrix(impute_y_test, predictions))
+
+kappa = cohen_kappa_score(impute_y_test, predictions)
+acc = float(cm[0][0] + cm[1][1]) / len(impute_y_test)
+auc = metrics.auc(fpr, tpr)
+recall = tpr[1]
+precis = float(cm[1][1]) / (cm[1][1] + cm[0][1])
+
+print('Final Test Data Results')
+print("Thresh=%.3f, n=%d" % (feature_importance[i], select_X_test.shape[1]))
+print('Accuracy = {0} \n \n'.format(acc))
+print('kappa score = {0} \n \n'.format(kappa))
+print('AUC Score = {0} \n \n'.format(auc))
+print('recall = {0} \n \n'.format(recall))
+print('precision = {0} \n \n'.format(precis))
 
 
+#Tree model for getting features importance
+clf = ExtraTreesClassifier()
+imputed_fireVarTrain = fireVarTrain.fillna(method="ffill")
+imputed_encoded_traindata = encoded_traindata.drop(['fire']).fillna(method="ffill")
+
+impute_X = np.array(imputed_encoded_traindata)
+impute_y = np.reshape(imputed_fireVarTrain.values,[imputed_fireVarTrain.shape[0],])
+
+clf = clf.fit(impute_X, impute_y)
 
 
-# Adaboost model
-from sklearn.ensemble import RandomForestClassifier
+UsedDf = encoded_traindata.drop(['fire'])
+important_features = pd.Series(data=clf.feature_importances_,index=UsedDf.columns)
+important_features.sort_values(ascending=False,inplace=True)
+#top 20 features
+print(important_features[0:20])
 
-model_rf = RandomForestClassifier(n_estimators = 65)
-model_rf.fit(X_train, y_train)
-pred_rf = model_rf.predict(X_test)
-real = y_test
-cm_rf = confusion_matrix(real, pred_rf)
-print(cm_rf)
+#Plotting the top 20 features
+y_pos = np.arange(len(important_features.index[0:20]))
 
-kappa_rf = cohen_kappa_score(real, pred_rf)
-
-fpr, tpr, thresholds = metrics.roc_curve(y_test, pred_rf, pos_label=1)
-roc_auc = metrics.auc(fpr, tpr)
-
-acc_rf = 'Accuracy = {0} \n \n'.format(float(cm_rf[0][0] + cm_rf[1][1]) / len(real))
-kapp_rf = 'kappa score = {0} \n \n'.format(kappa_rf)
-auc_rf = 'AUC Score = {0} \n \n'.format(metrics.auc(fpr, tpr))
-recall_rf = 'recall = {0} \n \n'.format(tpr[1])
-precis_rf = 'precision = {0} \n \n'.format(float(cm_rf[1][1]) / (cm_rf[1][1] + cm_rf[0][1]))
-
-print(acc_rf)
-print(kapp_rf)
-print(auc_rf)
-print(recall_rf)
-print(precis_rf)
-
-# Write model performance to log file:
-log_path = os.path.join(curr_path, "log/")
-
-with open('{0}ModelPerformance_RF_{1}.txt'.format(log_path, datetime.datetime.now().strftime('%m%d-%H%M%S')), 'a') as log_file:
-  log_file.write("Confusion Matrix: \n \n")
-  log_file.write(np.array2string(cm_rf)+"\n \n")
-  log_file.write("Model performance metrics: \n \n")
-  log_file.write(acc_rf)
-  log_file.write(kapp_rf)
-  log_file.write(auc_ada)
-  log_file.write(recall_rf)
-  log_file.write(precis_rf)
+plt.bar(y_pos,important_features.values[0:20], alpha=0.3)
+plt.xticks(y_pos, important_features.index[0:20], rotation = (90), fontsize = 11, ha='left')
+plt.ylabel('Feature Importance Scores')
+plt.title('Feature Importance')
 
 
-from sklearn import linear_model
-samples = np.array([0.1 if i == 0 else 1.2 for i in y_train])
-model = linear_model.LogisticRegression(C=1e5)
-model.fit(X_train, y_train,sample_weight = samples)
-pred = model.predict(X_test)
-real = y_test
-cm = confusion_matrix(real, pred)
-print(confusion_matrix(real, pred))
+features_png = "{0}FeatureImportancePlot_{1}.png".format(png_path, datetime.datetime.now())
+plt.savefig(features_png, dpi=150)
+plt.clf()
 
-from sklearn.metrics import cohen_kappa_score
-kappa = cohen_kappa_score(real, pred)
-
-fpr, tpr, thresholds = metrics.roc_curve(y_test, pred, pos_label=1)
-
-print('Accuracy = ', float(cm[0][0] + cm[1][1])/len(real))
-print('kappa score = ', kappa)
-print('AUC Score = ', metrics.auc(fpr, tpr))
-print('recall = ',tpr[1])
-print('precision = ',float(cm[1][1])/(cm[1][1]+cm[0][1]))
+important_features[0:50].to_csv('{0}FeatureImportanceList_{1}.csv'.format(log_path, datetime.datetime.now()))
