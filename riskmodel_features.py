@@ -378,9 +378,8 @@ encoded_traindata = encoded_combined[encoded_combined.CALL_CREATED_DATE <= cutof
 val_cutoffdate = '2015-12-31'
 
 encoded_traindata.to_csv("encode_train.csv")
-print("printed encoded_train")
-valuation_data = encoded_traindata[encoded_traindata.CALL_CREATED_DATE >= val_cutoffdate]
-fs_train_data = encoded_traindata[encoded_traindata.CALL_CREATED_DATE < val_cutoffdate]
+valuation_data = encoded_traindata[encoded_traindata.CALL_CREATED_DATE > val_cutoffdate]
+fs_train_data = encoded_traindata[encoded_traindata.CALL_CREATED_DATE <= val_cutoffdate]
 
 valuation_data = valuation_data.drop(['CALL_CREATED_DATE','TRACTCE10','BLOCKCE10'], axis=1)
 fs_train_data = fs_train_data.drop(['CALL_CREATED_DATE','TRACTCE10','BLOCKCE10'], axis=1)
@@ -412,93 +411,85 @@ no_fire_test = encoded_testdata.drop(['fire'], axis =1)
 X_test = np.array(no_fire_test)
 y_test = np.reshape(fireVarTest.values,[fireVarTest.shape[0],])
 
-# Adaboost model
-from sklearn.ensemble import AdaBoostClassifier
+X_validation = np.array(fs_train_data.drop(['fire'], axis=1))
+y_validation = np.array(fs_train_data['fire'])
 
-model = AdaBoostClassifier(n_estimators = 65, random_state=27)
+# Random Forest model
+from sklearn.ensemble import RandomForestClassifier
+
+model = RandomForestClassifier(n_estimators = 65)
 model.fit(X_train, y_train)
-pred_adaboost = model.predict(X_test)
+pred_rf = model.predict(X_test)
 real = y_test
-cm_ada = confusion_matrix(real, pred_adaboost)
-print(cm_ada)
+cm_rf = confusion_matrix(real, pred_rf)
+print(cm_rf)
 
-kappa_ada = cohen_kappa_score(real, pred_adaboost)
+kappa_rf = cohen_kappa_score(real, pred_rf)
 
-fpr, tpr, thresholds = metrics.roc_curve(y_test, pred_adaboost, pos_label=1)
+fpr, tpr, thresholds = metrics.roc_curve(y_test, pred_rf, pos_label=1)
 roc_auc = metrics.auc(fpr, tpr)
 
-acc_ada = 'Accuracy = {0} \n \n'.format(float(cm_ada[0][0] + cm_ada[1][1]) / len(real))
-kapp_ada = 'kappa score = {0} \n \n'.format(kappa_ada)
-auc_ada = 'AUC Score = {0} \n \n'.format(metrics.auc(fpr, tpr))
-recall_ada = 'recall = {0} \n \n'.format(tpr[1])
-precis_ada = 'precision = {0} \n \n'.format(float(cm_ada[1][1]) / (cm_ada[1][1] + cm_ada[0][1]))
+acc_rf = 'Accuracy = {0} \n \n'.format(float(cm_rf[0][0] + cm_rf[1][1]) / len(real))
+kapp_rf = 'kappa score = {0} \n \n'.format(kappa_rf)
+auc_rf = 'AUC Score = {0} \n \n'.format(metrics.auc(fpr, tpr))
+recall_rf = 'recall = {0} \n \n'.format(tpr[1])
+precis_rf = 'precision = {0} \n \n'.format(float(cm_rf[1][1]) / (cm_rf[1][1] + cm_rf[0][1]))
 
-print(acc_ada)
-print(kapp_ada)
-print(auc_ada)
-print(recall_ada)
-print(precis_ada)
-
+print(acc_rf)
+print(kapp_rf)
+print(auc_rf)
+print(recall_rf)
+print(precis_rf)
 
 print("Start Feature Selection")
 # ==== Feature Selection using Feature Importance =====
 from sklearn.feature_selection import SelectFromModel
 from sklearn.metrics import accuracy_score
 
-# imputed the values to run with the xgboost features selection
-fireVarVal = valuation_data['fire'].fillna(method="ffill")
-del valuation_data['fire']
-# valuation datasets for feature selection
-valuation_X = np.array(valuation_data.fillna(method="ffill"))
-valuation_y = np.reshape(fireVarVal.values, [fireVarVal.shape[0],])
-
-# make the training dataset for feature selection removing the valuation data
-fireVarFSTrain = fs_train_data['fire'].fillna(method="ffill")
-del fs_train_data['fire']
-# imputed training data for the feature selection
-impute_X = np.array(fs_train_data.fillna(method="ffill"))
-impute_y = np.reshape(fireVarFSTrain.values, [fireVarFSTrain.shape[0],])
 
 # calculate imputed test dataset
 imputed_fireVarTest = fireVarTest.fillna(method="ffill")
-
-# imputed XY test - not used until the model evaluation
-impute_X_test = np.array(encoded_testdata.fillna(method="ffill"))
+impute_X_test = np.array(encoded_testdata.drop('fire',axis=1).fillna(method="ffill"))
 impute_y_test = np.reshape(imputed_fireVarTest.values, [imputed_fireVarTest.shape[0],])
 
 #model for feature selection
-selection_model = AdaBoostClassifier(n_estimators = 65, random_state=27)
+selection_model = RandomForestClassifier(n_estimators = 60, max_depth=3, random_state=27)
 
 # create the list of features with corresponding feature importances
 feature_importance = pd.Series(data=model.feature_importances_, index=encoded_traindata.drop(['fire'], axis =1).columns)
 
+
 #sort the feature importance from low to hi
 feature_importance = feature_importance.sort_values()
 # Making threshold smaller
-thresh_num = 500
+thresh_num = X_validation.shape[1]
 
 feature_result = pd.DataFrame(columns=('Last_Feature', 'Thresh', 'Acc', 'Kapp', 'AUC', 'Recall', 'Precis'))
-
-for i in range(feature_importance.size-thresh_num, feature_importance.size):
+low_thresh = feature_importance[0]
+print(feature_importance[0])
+for i in range(feature_importance.size-thresh_num, feature_importance.size-2):
     # select features using threshold
+    if feature_importance[i] == low_thresh:
+        continue
+    else:
+        low_thresh = feature_importance[i]
+        print(feature_importance[i])
     selection = SelectFromModel(model, threshold=feature_importance[i], prefit=True)
-    select_X_train = selection.transform(impute_X)
+    select_X_train = selection.transform(X_train)
 
-    # train model
-    selection_model.fit(select_X_train, impute_y)
+    selection_model.fit(select_X_train, y_train)
 
-    # eval model
-    select_X_test = selection.transform(valuation_X)
+    select_X_test = selection.transform(X_validation)
     y_pred = selection_model.predict(select_X_test)
     predictions = [round(value) for value in y_pred]
     #metric calculation
-    fpr, tpr, thresholds = metrics.roc_curve(valuation_y, predictions, pos_label=1)
-    accuracy = accuracy_score(valuation_y, predictions)
-    cm = confusion_matrix(valuation_y, predictions)
-    print(confusion_matrix(valuation_y, predictions))
+    fpr, tpr, thresholds = metrics.roc_curve(y_validation, predictions, pos_label=1)
+    accuracy = accuracy_score(y_validation, predictions)
+    cm = confusion_matrix(y_validation, predictions)
+    print(confusion_matrix(y_validation, predictions))
 
-    kappa = cohen_kappa_score(valuation_y, predictions)
-    acc = float(cm[0][0] + cm[1][1]) / len(valuation_y)
+    kappa = cohen_kappa_score(y_validation, predictions)
+    acc = float(cm[0][0] + cm[1][1]) / len(y_validation)
     auc = metrics.auc(fpr, tpr)
     recall = tpr[1]
     precis = float(cm[1][1]) / (cm[1][1] + cm[0][1])
@@ -512,51 +503,53 @@ for i in range(feature_importance.size-thresh_num, feature_importance.size):
 
     feature_result.loc[i] = [feature_importance.index[i], feature_importance[i], acc, kappa, auc, recall, precis]
 
-#find the best recall
-best_row = feature_result.loc[feature_result['Recall'].idxmax()]
+#find the best f1
+feature_result['F1'] = 2* (feature_result['Recall']*feature_result['Precis']) / (feature_result['Recall']+feature_result['Precis'])
+max_f1 = feature_result['F1'].idxmax()
+best_row = feature_result.loc[feature_result['F1'].idxmax()]
 print("best row:")
 print(best_row)
 
 feature_result.to_csv("Feature_Selection_Results{0}.csv".format(datetime.datetime.now()))
 
+thres = feature_result.loc[feature_result['F1'] == feature_result['F1'][max_f1]]
+
 #test on the test data
-# eval model
-selection_test = SelectFromModel(model, threshold=best_row[1], prefit=True)
-select_X_test = selection_test.transform(impute_X_test)
-y_pred = selection_model.predict(select_X_test)
-predictions = [round(value) for value in y_pred]
-fpr, tpr, thresholds = metrics.roc_curve(impute_y_test, predictions, pos_label=1)
-accuracy = accuracy_score(impute_y_test, predictions)
-cm = confusion_matrix(impute_y_test, predictions)
-print(confusion_matrix(impute_y_test, predictions))
 
-kappa = cohen_kappa_score(impute_y_test, predictions)
-acc = float(cm[0][0] + cm[1][1]) / len(impute_y_test)
-auc = metrics.auc(fpr, tpr)
-recall = tpr[1]
-precis = float(cm[1][1]) / (cm[1][1] + cm[0][1])
+for i in range(thres.shape[0]):
+    selection = SelectFromModel(model, threshold=thres.iloc[i]['Thresh'], prefit=True)
+    select_X_train = selection.transform(X_train)
+    selection_model.fit(select_X_train, y_train)
+    select_X_test = selection.transform(impute_X_test)
+    y_pred = selection_model.predict(select_X_test)
+    predictions = [round(value) for value in y_pred]
+    fpr, tpr, thresholds = metrics.roc_curve(impute_y_test, predictions, pos_label=1)
+    accuracy = accuracy_score(impute_y_test, predictions)
+    cm = confusion_matrix(impute_y_test, predictions)
+    print(confusion_matrix(impute_y_test, predictions))
 
-print('Final Test Data Results')
-print("Thresh=%.3f, n=%d" % (feature_importance[i], select_X_test.shape[1]))
-print('Accuracy = {0} \n \n'.format(acc))
-print('kappa score = {0} \n \n'.format(kappa))
-print('AUC Score = {0} \n \n'.format(auc))
-print('recall = {0} \n \n'.format(recall))
-print('precision = {0} \n \n'.format(precis))
+    kappa = cohen_kappa_score(impute_y_test, predictions)
+    acc = float(cm[0][0] + cm[1][1]) / len(impute_y_test)
+    auc = metrics.auc(fpr, tpr)
+    recall = tpr[1]
+    precis = float(cm[1][1]) / (cm[1][1] + cm[0][1])
+
+    print('Final Test Data Results')
+    print("Thresh=%d, n=%d" % (thres.iloc[i]['Thresh'], select_X_test.shape[1]))
+    print('Accuracy = {0} \n \n'.format(acc))
+    print('kappa score = {0} \n \n'.format(kappa))
+    print('AUC Score = {0} \n \n'.format(auc))
+    print('recall = {0} \n \n'.format(recall))
+    print('precision = {0} \n \n'.format(precis))
 
 
 #Tree model for getting features importance
 clf = ExtraTreesClassifier()
-imputed_fireVarTrain = fireVarTrain.fillna(method="ffill")
-imputed_encoded_traindata = encoded_traindata.drop(['fire']).fillna(method="ffill")
 
-impute_X = np.array(imputed_encoded_traindata)
-impute_y = np.reshape(imputed_fireVarTrain.values,[imputed_fireVarTrain.shape[0],])
-
-clf = clf.fit(impute_X, impute_y)
+clf = clf.fit(X_train, y_train)
 
 
-UsedDf = encoded_traindata.drop(['fire'])
+UsedDf = encoded_traindata.drop('fire',axis=1)
 important_features = pd.Series(data=clf.feature_importances_,index=UsedDf.columns)
 important_features.sort_values(ascending=False,inplace=True)
 #top 20 features
@@ -571,8 +564,9 @@ plt.ylabel('Feature Importance Scores')
 plt.title('Feature Importance')
 
 
-features_png = "{0}FeatureImportancePlot_{1}.png".format(png_path, datetime.datetime.now())
-plt.savefig(features_png, dpi=150)
-plt.clf()
-
+#features_png = "{0}FeatureImportancePlot_{1}.png".format(png_path, datetime.datetime.now())
+#plt.savefig(features_png, dpi=150)
+#plt.clf()
+# Write model performance to log file:
+log_path = os.path.join(curr_path, "log/")
 important_features[0:50].to_csv('{0}FeatureImportanceList_{1}.csv'.format(log_path, datetime.datetime.now()))
