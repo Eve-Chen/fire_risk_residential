@@ -199,7 +199,7 @@ fire_pre14['street'] = fire_pre14['street'].str.strip() + ' ' + fire_pre14['st_t
 # drop irrelevant columns
 pre14_drop = ['Unnamed: 0','PRIMARY_UNIT', 'MAP_PAGE', 'alm_dttm', 'arv_dttm', 'XCOORD', 
               'YCOORD','inci_id', 'inci_type', 'alarms', 'st_prefix',
-              'st_suffix', 'st_type', 'CALL_NO','descript','ï..AGENCY']
+              'st_suffix', 'st_type', 'CALL_NO','descript','..AGENCY']
 for col in pre14_drop:
   del fire_pre14[col]
 
@@ -267,7 +267,7 @@ fire_blocks = fire_blocks.drop_duplicates()
 # #### 3.1 joining dynamic data with fire incidents
 
 # making the fire column with all type 100s as fires and map it to 0 or 1
-fire_blocks['fire'] = fire_blocks['full.code'].astype(str).                    map(lambda x: 1 if x[0]=='1' else 0)
+fire_blocks['fire'] = fire_blocks['full.code'].astype(str).map(lambda x: 1 if x[0]=='1' else 0)
 # keep non-fire incidents as features
 nonfire_incidents = fire_blocks[fire_blocks['fire'] != 1]
 nonfire_incidents = nonfire_incidents[['CALL_CREATED_DATE','full.code','TRACTCE10', 'BLOCKCE10']]
@@ -276,24 +276,14 @@ fire_blocks.drop('full.code',axis=1,inplace=True)
 
 # group by every certain period of time
 # reason for setting period to year: tax data is based on year
-period = '2Q'
-# hacky thing to make 6-month period work
-fire_blocks.loc[-1] = fire_blocks.iloc[0]
-nonfire_incidents.loc[-1] = nonfire_incidents.iloc[0]
-plidata_blocks.loc[-1] = plidata_blocks.iloc[0]
-taxdata_blocks.loc[-1] = taxdata_blocks.iloc[0]
-fire_blocks['CALL_CREATED_DATE'].loc[-1] = pd.to_datetime('12-31-'+str(fire_blocks['CALL_CREATED_DATE'].min().year-1))
-nonfire_incidents['CALL_CREATED_DATE'].loc[-1] = pd.to_datetime('12-31-'+str(nonfire_incidents['CALL_CREATED_DATE'].min().year-1))
-plidata_blocks['INSPECTION_DATE'].loc[-1] = pd.to_datetime('12-31-'+str(plidata_blocks['INSPECTION_DATE'].min().year-1))
-taxtemp = taxdata_blocks.copy()
-taxtemp['tax_year'] = taxtemp['tax_year'] + datetime.timedelta(days=-6*31)
-taxdata_blocks = taxdata_blocks.append(taxtemp)
-taxdata_blocks['tax_year'].loc[-1] = pd.to_datetime('12-31-'+str(taxdata_blocks['tax_year'].min().year-1))
+period = 'A'
 fire_groups = fire_blocks.groupby(pd.Grouper(key='CALL_CREATED_DATE', freq=period))
 nonfire_groups = nonfire_incidents.groupby(pd.Grouper(key='CALL_CREATED_DATE', freq=period))
 plidata_groups = plidata_blocks.groupby(pd.Grouper(key='INSPECTION_DATE', freq=period))
 taxdata_groups = taxdata_blocks.groupby(pd.Grouper(key='tax_year', freq=period))
 
+# get the date of the earliest fire in each block in each year
+block_fire_dates = fire_groups.apply(lambda x:x.groupby(['TRACTCE10','BLOCKCE10']).apply(lambda x:x[x['fire']==1].min()))
 
 # then group fire by census blocks
 def groupByBlock(df,categoricals, method):
@@ -307,17 +297,36 @@ def groupByBlock(df,categoricals, method):
     if method == 'sum':
         df_grouped=df_grouped.sum()
     return df_grouped
+
 fire_divided = fire_groups.apply(groupByBlock,categoricals=[],method='max')
 fire_divided.drop('CALL_CREATED_DATE',axis=1,inplace=True)
 fire_divided=fire_divided.reset_index()
-fire_divided=fire_divided[fire_divided['CALL_CREATED_DATE'] > fire_divided['CALL_CREATED_DATE'].min()]
 fire_divided=fire_divided.fillna(0)
 
 
+def groupByBlockNonfire(df, categoricals, method):
+    # only keep data that occurred before the fire
+    year = df['CALL_CREATED_DATE'].iloc[0].year
+    df = pd.merge(df, block_fire_dates[block_fire_dates['CALL_CREATED_DATE'].dt.year == year], how='left',
+                  on=['TRACTCE10', 'BLOCKCE10'], suffixes=['', '_F'])
+    df['CALL_CREATED_DATE_F'] = df['CALL_CREATED_DATE_F'].fillna(pd.to_datetime('12-31-' + str(year)))
+    df = df[df['CALL_CREATED_DATE'] <= df['CALL_CREATED_DATE_F']]
+    df = df.drop(['CALL_CREATED_DATE_F', 'fire'], axis=1)
+
+    dummies = [pd.get_dummies(df[feature]) for feature in categoricals]
+    df = pd.concat([df] + dummies, axis=1)
+    df.drop(categoricals, axis=1, inplace=True)
+    df = pd.merge(df, blocks, how='right', on=['TRACTCE10', 'BLOCKCE10'])
+    df_grouped = df.groupby(['TRACTCE10', 'BLOCKCE10'])
+    if method == 'max':
+        df_grouped = df_grouped.max()
+    if method == 'sum':
+        df_grouped = df_grouped.sum()
+    return df_grouped
+
 # group nonfire incidents by census blocks
-nonfire_divided = nonfire_groups.apply(groupByBlock,categoricals=['full.code'],method='sum')
+nonfire_divided = nonfire_groups.apply(groupByBlockNonfire,categoricals=['full.code'],method='sum')
 nonfire_divided=nonfire_divided.reset_index()
-nonfire_divided=nonfire_divided[nonfire_divided['CALL_CREATED_DATE'] > nonfire_divided['CALL_CREATED_DATE'].min()]
 nonfire_divided=nonfire_divided.fillna(0)
 
 
@@ -332,7 +341,6 @@ def groupByBlock_pli(df):
     return df_grouped
 pli_divided=plidata_groups.apply(groupByBlock_pli)
 pli_divided=pli_divided.reset_index()
-pli_divided=pli_divided[pli_divided['INSPECTION_DATE'] > pli_divided['INSPECTION_DATE'].min()]
 pli_divided=pli_divided.fillna(0)
 
 
@@ -347,7 +355,6 @@ def groupByBlock_tax(df):
 
 tax_divided=taxdata_groups.apply(groupByBlock,categoricals=['lien_description'],method='sum')
 tax_divided=tax_divided.reset_index()
-tax_divided=tax_divided[tax_divided['tax_year'] > tax_divided['tax_year'].min()]
 tax_divided=tax_divided.fillna(0)
 
 
@@ -379,6 +386,7 @@ encoded_combined.drop(features,axis=1,inplace=True)
 encoded_combined=encoded_combined.dropna(subset=['CALL_CREATED_DATE'])
 encoded_combined = encoded_combined.drop_duplicates()
 encoded_combined=encoded_combined.fillna(0)
+encoded_combined_no2018 = encoded_combined[encoded_combined['CALL_CREATED_DATE'] < '2018-1-1']
 
 
 # ### 4 Split data into training set and test set
@@ -395,13 +403,19 @@ y_train=np.array(traindata['fire'])
 
 # preparing test set
 testdata = encoded_combined[encoded_combined.CALL_CREATED_DATE > cutoffdate]
+testdata_no2018 = testdata[testdata['CALL_CREATED_DATE'] < '2018-1-1']
 testdata.drop(['CALL_CREATED_DATE','TRACTCE10','BLOCKCE10'],axis=1,inplace=True)
 testdata.fillna(0)
 X_test=np.array(testdata.drop(['fire'],axis=1))
 y_test=np.array(testdata['fire'])
+testdata_no2018.drop(['CALL_CREATED_DATE','TRACTCE10','BLOCKCE10'],axis=1,inplace=True)
+testdata_no2018.fillna(0)
+X_test_no2018=np.array(testdata_no2018.drop(['fire'],axis=1))
+y_test_no2018=np.array(testdata_no2018['fire'])
 
 
 # Adaboost model
+print("Adaboost")
 from sklearn.ensemble import AdaBoostClassifier
 
 model_adaboost = AdaBoostClassifier(n_estimators = 65, random_state=27)
@@ -442,12 +456,11 @@ with open('{0}ModelPerformance_AdaBoost_{1}.txt'.format(log_path, datetime.datet
   log_file.write(precis_ada)
 
 
-
-
-# Adaboost model
+# Random Forest model
+print("Random Forest")
 from sklearn.ensemble import RandomForestClassifier
 
-model_rf = RandomForestClassifier(n_estimators = 65)
+model_rf = RandomForestClassifier(n_estimators=60, max_depth=3, random_state=27)
 model_rf.fit(X_train, y_train)
 pred_rf = model_rf.predict(X_test)
 real = y_test
@@ -484,23 +497,93 @@ with open('{0}ModelPerformance_RF_{1}.txt'.format(log_path, datetime.datetime.no
   log_file.write(recall_rf)
   log_file.write(precis_rf)
 
+# Models with no 2018 test data
+# Adaboost model
+print("No 2018 test data:")
+print("Adaboost")
+pred_adaboost = model_adaboost.predict(X_test_no2018)
+real = y_test_no2018
+cm_ada = confusion_matrix(real, pred_adaboost)
+print(cm_ada)
 
-from sklearn import linear_model
-samples = np.array([0.1 if i == 0 else 1.2 for i in y_train])
-model = linear_model.LogisticRegression(C=1e5)
-model.fit(X_train, y_train,sample_weight = samples)
-pred = model.predict(X_test)
-real = y_test
-cm = confusion_matrix(real, pred)
-print(confusion_matrix(real, pred))
+kappa_ada = cohen_kappa_score(real, pred_adaboost)
 
-from sklearn.metrics import cohen_kappa_score
-kappa = cohen_kappa_score(real, pred)
+fpr, tpr, thresholds = metrics.roc_curve(real, pred_adaboost, pos_label=1)
+roc_auc = metrics.auc(fpr, tpr)
 
-fpr, tpr, thresholds = metrics.roc_curve(y_test, pred, pos_label=1)
+acc_ada = 'Accuracy = {0} \n \n'.format(float(cm_ada[0][0] + cm_ada[1][1]) / len(real))
+kapp_ada = 'kappa score = {0} \n \n'.format(kappa_ada)
+auc_ada = 'AUC Score = {0} \n \n'.format(metrics.auc(fpr, tpr))
+recall_ada = 'recall = {0} \n \n'.format(tpr[1])
+precis_ada = 'precision = {0} \n \n'.format(float(cm_ada[1][1]) / (cm_ada[1][1] + cm_ada[0][1]))
 
-print('Accuracy = ', float(cm[0][0] + cm[1][1])/len(real))
-print('kappa score = ', kappa)
-print('AUC Score = ', metrics.auc(fpr, tpr))
-print('recall = ',tpr[1])
-print('precision = ',float(cm[1][1])/(cm[1][1]+cm[0][1]))
+print(acc_ada)
+print(kapp_ada)
+print(auc_ada)
+print(recall_ada)
+print(precis_ada)
+
+# Write model performance to log file:
+log_path = os.path.join(curr_path, "log/")
+
+with open('{0}ModelPerformance_AdaBoost_no2018_{1}.txt'.format(log_path, datetime.datetime.now().strftime('%m%d-%H%M%S')), 'a') as log_file:
+  log_file.write("Confusion Matrix: \n \n")
+  log_file.write(np.array2string(cm_ada)+"\n \n")
+  log_file.write("Model performance metrics: \n \n")
+  log_file.write(acc_ada)
+  log_file.write(kapp_ada)
+  log_file.write(auc_ada)
+  log_file.write(recall_ada)
+  log_file.write(precis_ada)
+
+
+# Random Forest model
+print("Random Forest")
+pred_rf = model_rf.predict(X_test_no2018)
+real = y_test_no2018
+cm_rf = confusion_matrix(real, pred_rf)
+print(cm_rf)
+
+kappa_rf = cohen_kappa_score(real, pred_rf)
+
+fpr, tpr, thresholds = metrics.roc_curve(real, pred_rf, pos_label=1)
+roc_auc = metrics.auc(fpr, tpr)
+
+acc_rf = 'Accuracy = {0} \n \n'.format(float(cm_rf[0][0] + cm_rf[1][1]) / len(real))
+kapp_rf = 'kappa score = {0} \n \n'.format(kappa_rf)
+auc_rf = 'AUC Score = {0} \n \n'.format(metrics.auc(fpr, tpr))
+recall_rf = 'recall = {0} \n \n'.format(tpr[1])
+precis_rf = 'precision = {0} \n \n'.format(float(cm_rf[1][1]) / (cm_rf[1][1] + cm_rf[0][1]))
+
+print(acc_rf)
+print(kapp_rf)
+print(auc_rf)
+print(recall_rf)
+print(precis_rf)
+
+# Write model performance to log file:
+log_path = os.path.join(curr_path, "log/")
+
+with open('{0}ModelPerformance_RF_no2018_{1}.txt'.format(log_path, datetime.datetime.now().strftime('%m%d-%H%M%S')), 'a') as log_file:
+  log_file.write("Confusion Matrix: \n \n")
+  log_file.write(np.array2string(cm_rf)+"\n \n")
+  log_file.write("Model performance metrics: \n \n")
+  log_file.write(acc_rf)
+  log_file.write(kapp_rf)
+  log_file.write(auc_ada)
+  log_file.write(recall_rf)
+  log_file.write(precis_rf)
+
+# pred_prob = model.predict_proba(X_test)[:,1]
+# fpr, tpr, thresholds = metrics.roc_curve(y_test, pred_prob, pos_label=1)
+# roc_auc = metrics.auc(fpr, tpr)
+# plt.title('Receiver Operating Characteristic')
+# plt.plot(fpr, tpr, 'b',
+# label='AUC = %0.2f'% roc_auc)
+# plt.legend(loc='lower right')
+# plt.plot([0,1],[0,1],'r--')
+# plt.xlim([-0.1,1.2])
+# plt.ylim([-0.1,1.2])
+# plt.ylabel('True Positive Rate')
+# plt.xlabel('False Positive Rate')
+# plt.show()
