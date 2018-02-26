@@ -10,4 +10,4 @@ This project extends the previous [fire_risk_analysis](https://github.com/Cityof
 
 2. Download "acs_income.csv", "acs_occupancy.csv", "acs_year_built.csv", "acs_year_moved.csv" from google drive and put them in the `datasets` folder.
 
-3. Run `riskmodel.py`.
+3. Run `risk_model_residential_kdd.py`.
