@@ -11,8 +11,6 @@ import pandas as pd
 import numpy as np
 import sqlalchemy as sa
 import matplotlib.pyplot as plt
-# from sklearn.decomposition import PCA
-# from sklearn.preprocessing import scale
 import pandas as pd
 from sklearn import datasets, linear_model, cross_validation, grid_search
 import numpy as np
@@ -67,31 +65,19 @@ taxdata = pd.read_csv("./datasets/tax.csv", encoding='utf-8')
 #read parcel data (matches parcels to census tract and block group
 parcel = pd.read_csv(os.path.join(dataset_path, "parcels.csv"), encoding='utf-8')
 #read ACS data
-acs_data = ['acs_income.csv','acs_occupancy.csv','acs_year_built.csv','acs_year_moved.csv']
+acs_data = ['income.csv','occupancy.csv','yearBuilt.csv','yearMovedIn.csv']
 def clean_acs(df):
     #Use descriptive names in first row
-    df.columns = df.loc[0]
     df = df.drop(0)
-    df = df.drop(['Id', 'Id2'], axis=1)
-    #Extract census block and tract
-    df[['BLOCKCE10', 'TRACTCE10']] = df['Geography'].str.extract(
-        'Block Group (\d), Census Tract (\d+\.?\d*)')
-    df = df.drop(['Geography'], axis=1)
-    #Drop first two columns since they only contain totals
-    df = df.drop(df.columns[[0,1]], axis=1)
-    #Drop margin of errors
-    df = df.drop(df.columns[df.columns.str.startswith('Margin')], axis=1)
-    #Convert to numbers
-    df['BLOCKCE10'] = df['BLOCKCE10'].astype('float')
-    df['TRACTCE10'] = df['TRACTCE10'].astype('float')
-    #Multiply tract by 100 to be consistent with other data
-    df['TRACTCE10'] = df['TRACTCE10'] * 100
+    df = df.drop(['Estimate!!Total','state','county'], axis=1)
     return df
 acs_data = map(lambda x: os.path.join(dataset_path, x), acs_data)
 acs_data = map(pd.read_csv, acs_data)
 acs_data = map(clean_acs, acs_data)
 #Merge datasets together
-acs_data_combined = functools.reduce(lambda x,y:x.merge(y, how='outer', on=['BLOCKCE10','TRACTCE10']), acs_data)
+acs_data_combined = functools.reduce(lambda x,y:x.merge(y, how='outer', on=['tract','block group']), acs_data)
+acs_data_combined['tract']=pd.to_numeric(acs_data_combined.tract)
+acs_data_combined['block group'] = pd.to_numeric(acs_data_combined['block group'])
 
 # cleaning pitt dataset
 # removing all properties outside Pittsburgh, Wilkinsburg, and Ingram
@@ -140,7 +126,7 @@ taxdata = taxdata.drop_duplicates()
 parcel = parcel[(parcel.geo_name_cousub == 'Pittsburgh city')]
 parcel_blocks = parcel[['PIN', 'TRACTCE10', 'BLOCKCE10']]
 #get first digit of block, convert to int
-parcel_blocks['BLOCKCE10'] = parcel_blocks['BLOCKCE10'].astype(str).str[0].astype(float)
+parcel_blocks['BLOCKCE10'] = parcel_blocks['BLOCKCE10'].astype(str).str[0].astype(int)
 #ignore bad parcels
 parcel_blocks = parcel_blocks[parcel_blocks['PIN'] != ' ']
 parcel_blocks = parcel_blocks[parcel_blocks['PIN'] != 'COMMON GROUND']
@@ -170,8 +156,8 @@ pittdata_blocks = grouped.agg({
 #reset index to columns
 pittdata_blocks = pittdata_blocks.reset_index(level=[0,1])
 #merge pittdata with acs
-pittacs = pd.merge(pittdata_blocks, acs_data_combined, how='inner', on=['BLOCKCE10','TRACTCE10'])
-
+pittacs = pd.merge(pittdata_blocks, acs_data_combined, how='inner', left_on=['BLOCKCE10','TRACTCE10'],right_on=['block group','tract'])
+pittacs = pittacs.drop(['tract','block group'],axis=1)
 # keep a copy of blocks and tracts
 blocks = pittacs[['TRACTCE10','BLOCKCE10']].drop_duplicates()
 
@@ -218,13 +204,13 @@ pre14_drop = ['Unnamed: 0','PRIMARY_UNIT', 'MAP_PAGE', 'alm_dttm', 'arv_dttm', '
               'YCOORD','inci_id', 'inci_type', 'alarms', 'st_prefix',
               'st_suffix', 'st_type', 'CALL_NO','descript','ï..AGENCY']
 for col in pre14_drop:
-  del fire_pre14[col]
+      del fire_pre14[col]
 
 
 post14_drop = ['alm_dttm', 'arv_dttm', 'XCOORD', 'YCOORD', 'alarms', 
                'inci_type', 'CALL_NO','descript']
 for col in post14_drop:
-  del fire_new[col]
+      del fire_new[col]
 
 # joining both the fire incidents file together
 fire_new = fire_new.append(fire_pre14, ignore_index=True)
@@ -507,8 +493,7 @@ for i in range(feature_importance.size-thresh_num, feature_importance.size-2):
         continue
     else:
         low_thresh = feature_importance[i]
-#         print(feature_importance[i])
-        
+         
     # initialize model and fit on fewer features
     selection_model = RandomForestClassifier(n_estimators = 65)
     selection = SelectFromModel(model, threshold=feature_importance[i], prefit=True)
@@ -556,10 +541,10 @@ select_X_test=selection.transform(X_test)
 
 # ### 6 Random Forest hyper-parameter tuning
 
-# In[16]:
+# In[22]:
 
 # tuned hyper-parameters based on recall
-score='recall_macro'
+score='f1'
 tscv =TimeSeriesSplit(n_splits=3) 
 
 tuned_parameters= {'n_estimators':[1,10,50, 60,100,500],
@@ -601,7 +586,7 @@ print()
 # In[17]:
 
 #test on the test data
-tuned_model = RandomForestClassifier(n_estimators = 500, max_depth=5, random_state=27, max_features='sqrt')
+tuned_model = RandomForestClassifier(n_estimators = 60, max_depth=10, random_state=27, max_features='sqrt')
 X_trainVal=np.concatenate((select_X_train, select_X_val),axis=0)
 y_trainVal=np.concatenate((y_train, y_val),axis=0)
 tuned_model.fit(X_trainVal, y_trainVal)
@@ -649,6 +634,7 @@ plt.title('Feature Importance')
 
 features_png = "{0}FeatureImportancePlot_{1}.png".format(png_path, datetime.datetime.now().strftime('%m%d-%H%M%S'), 'a')
 plt.savefig(features_png, dpi=150)
+plt.show()
 
 # Write model performance to log file:
 log_path = os.path.join(curr_path, "log/")
@@ -705,9 +691,9 @@ plt.xlabel('False Positive Rate')
 plt.ylabel('True Positive Rate')
 #     plt.title('Receiver operating characteristic example')
 plt.legend(loc="lower right")
-plt.savefig('roc_%d.png'%d)
+roc_png = "{0}roc_{1}.png".format(png_path, datetime.datetime.now().strftime('%m%d-%H%M%S'), 'a')
+plt.savefig(roc_png)
 plt.show()
-d+=1
 
 
 # In[ ]:
