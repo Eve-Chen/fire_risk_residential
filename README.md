@@ -16,5 +16,6 @@ This project extends the previous [fire_risk_analysis](https://github.com/Cityof
 3. Run `risk_model_residential.py`.
 
 ## Description of other files included in this branch
-1. `risk_model_residential.ipynb`: The ipython notebook version of `risk_model_residential.py`, with model outputs such as feature importance ranking and ROC curve shown as inline figures.
-2. `Allmodels.py`: All models considered during model development.
+1. `columns.json`: The `getdata.py` scraps [WPRDC](https://www.wprdc.org) for tax lien data based on the keys defined in `columns.json`. To include more features, check [WPRDC](https://www.wprdc.org) for the description of the tax lien datasets and add additional keys in `columns.json`.
+2. `risk_model_residential.ipynb`: The ipython notebook version of `risk_model_residential.py`, with model outputs such as feature importance ranking and ROC curve shown as inline figures.
+3. `Allmodels.py`: All models considered during model development.
