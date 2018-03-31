@@ -1,6 +1,6 @@
 # fire_risk_residential
 
-This project extends the previous [fire_risk_analysis](https://github.com/CityofPittsburgh/fire_risk_analysis) from predicting fire risk in commercial properties to predicting fire risk in residential properties, in order to inform the community risk reduction efforts. This is the legacy version. The most up to date version is under the [development branch](https://github.com/Eve-Chen/fire_risk_residential/tree/development)
+This project extends the previous [fire_risk_analysis](https://github.com/CityofPittsburgh/fire_risk_analysis) from predicting fire risk in commercial properties to predicting fire risk in residential properties, in order to inform the community risk reduction efforts. This is the legacy version. The most up to date version is under the [development branch](https://github.com/Eve-Chen/fire_risk_residential/tree/development).
 
 ## How to set up
 1. Run `getdata.py` to scrape [WPRDC](https://www.wprdc.org) for:
