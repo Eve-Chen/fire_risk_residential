@@ -38,7 +38,6 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 import os
 import functools
-
 # Turn off pandas chained assignment warning
 pd.options.mode.chained_assignment = None  # default='warn'
 pd.options.display.max_columns = 999
