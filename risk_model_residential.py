@@ -160,6 +160,7 @@ pittacs = pd.merge(pittdata_blocks, acs_data_combined, how='inner', left_on=['BL
 pittacs = pittacs.drop(['tract','block group'],axis=1)
 # keep a copy of blocks and tracts
 blocks = pittacs[['TRACTCE10','BLOCKCE10']].drop_duplicates()
+blocks = blocks.astype('int32')
 
 
 # #### 1.2 merge plidata with census block
@@ -439,6 +440,12 @@ testdata.fillna(0)
 X_test=np.array(testdata.drop(['fire'],axis=1))
 y_test=np.array(testdata['fire'])
 
+# entire dataset for post hoc analysis
+wholedata =  encoded_combined.drop(['CALL_CREATED_DATE','TRACTCE10','BLOCKCE10'],axis=1)
+wholedata.fillna(0)
+X_whole=np.array(wholedata.drop(['fire'],axis=1))
+y_whole=np.array(wholedata['fire'])
+
 
 # ### 5 Random Forest feature selection
 
@@ -541,7 +548,7 @@ select_X_test=selection.transform(X_test)
 
 # ### 6 Random Forest hyper-parameter tuning
 
-# In[22]:
+# In[16]:
 
 # tuned hyper-parameters based on recall
 score='f1'
@@ -614,6 +621,19 @@ print('precision = {0} \n \n'.format(precis))
 
 # In[18]:
 
+# getting the risk score for every block-group:
+class_proba= tuned_model.predict_proba(select_X_test) # each row is probs for y=0 and y=1
+risk = []
+for row in class_proba:
+    risk.append(row[1])
+cols = {"TRACTCE10": blocks['TRACTCE10'].tolist(), "BLOCKCE10":blocks['BLOCKCE10'].tolist(), "Fire": y_pred, "RiskScore": risk}
+results = pd.DataFrame(cols,columns=['TRACTCE10','BLOCKCE10','Fire','RiskScore'])
+log_path = os.path.join(curr_path, "log/")
+results.to_csv('{0}Results_{1}.csv'.format(log_path, datetime.datetime.now().strftime('%m%d-%H%M%S')), ',')
+
+
+# In[19]:
+
 # use full dataset to get top 20 features (needs to be changed to tuned model)
 important_features = pd.Series(data=model.feature_importances_,
                                index=traindata.drop(['fire'], axis =1).columns)
@@ -622,7 +642,7 @@ important_features.sort_values(ascending=False,inplace=True)
 print(important_features[0:20])
 
 
-# In[19]:
+# In[20]:
 
 # Plotting the top 20 features
 y_pos = np.arange(len(important_features.index[0:20]))
@@ -641,7 +661,7 @@ log_path = os.path.join(curr_path, "log/")
 important_features[0:50].to_csv('{0}FeatureImportanceList_{1}.csv'.format(log_path, datetime.datetime.now().strftime('%m%d-%H%M%S')), 'a')
 
 
-# In[20]:
+# In[21]:
 
 # plot ROC curve
 from scipy import interp
@@ -694,6 +714,37 @@ plt.legend(loc="lower right")
 roc_png = "{0}roc_{1}.png".format(png_path, datetime.datetime.now().strftime('%m%d-%H%M%S'), 'a')
 plt.savefig(roc_png)
 plt.show()
+
+
+# ## 8 model performance on the entire 8 year data
+
+# In[22]:
+
+#test on the wholedata
+tuned_model = RandomForestClassifier(n_estimators = 60, max_depth=10, random_state=27, max_features='sqrt')
+X_trainWhole=np.concatenate((select_X_train, select_X_val,select_X_test),axis=0)
+y_trainWhole=np.concatenate((y_train, y_val,y_test),axis=0)
+tuned_model.fit(X_trainWhole, y_trainWhole)
+y_pred = tuned_model.predict(select_X_test)
+predictions = [round(value) for value in y_pred]
+fpr, tpr, thresholds = metrics.roc_curve(y_test, predictions, pos_label=1)
+accuracy = accuracy_score(y_test, predictions)
+cm = confusion_matrix(y_test, predictions)
+print(confusion_matrix(y_test, predictions))
+
+kappa = cohen_kappa_score(y_test, predictions)
+acc = float(cm[0][0] + cm[1][1]) / len(y_test)
+auc = metrics.auc(fpr, tpr)
+recall = tpr[1]
+precis = float(cm[1][1]) / (cm[1][1] + cm[0][1])
+
+print('Final Test Data Results')
+print("Thresh=%f, n=%d" % (thres.iloc[0]['Thresh'], select_X_test.shape[1]))
+print('Accuracy = {0} \n \n'.format(acc))
+print('kappa score = {0} \n \n'.format(kappa))
+print('AUC Score = {0} \n \n'.format(auc))
+print('recall = {0} \n \n'.format(recall))
+print('precision = {0} \n \n'.format(precis))
 
 
 # In[ ]:
